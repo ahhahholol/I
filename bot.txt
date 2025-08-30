@@ -1,0 +1,106 @@
+import discord
+import requests
+from flask import Flask
+from threading import Thread
+
+# Flask app to keep Replit alive
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# Discord bot token (replace with your actual token)
+TOKEN = 'your_bot_token_here'  # Replace with your Discord bot token
+
+# Set up Discord client with intents
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+
+@client.event
+async def on_ready():
+    print(f'We have logged in as {client.user}')
+
+@client.event
+async def on_message(message):
+    if message.author == client.user:
+        return
+
+    if message.content.startswith('$roblox_track'):
+        username = message.content[len('$roblox_track '):].strip()
+        if username:
+            try:
+                # Get Roblox user ID from username using updated API
+                api_url = f'https://users.roblox.com/v1/users/search?keyword={username}&limit=10'
+                headers = {'accept': 'application/json'}
+                response = requests.get(api_url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+
+                user_id = None
+                for user in data.get('data', []):
+                    if user.get('name', '').lower() == username.lower():
+                        user_id = user['id']
+                        break
+
+                if not user_id:
+                    await message.channel.send(f"User '{username}' not found.")
+                    return
+
+                # Get user profile information
+                profile_url = f'https://users.roblox.com/v1/users/{user_id}'
+                profile_response = requests.get(profile_url, headers=headers)
+                profile_response.raise_for_status()
+                profile_data = profile_response.json()
+
+                # Get avatar thumbnail
+                avatar_url = f'https://thumbnails.roblox.com/v1/users/avatar?userIds={user_id}&size=420x420&format=Png&isCircular=false'
+                avatar_response = requests.get(avatar_url, headers=headers)
+                avatar_response.raise_for_status()
+                avatar_data = avatar_response.json()
+
+                # Create embed with user information
+                embed = discord.Embed(title=f"Roblox Profile: {username}", color=0x00ff00)
+                embed.add_field(name="User ID", value=user_id, inline=True)
+                embed.add_field(name="Display Name", value=profile_data.get('displayName', 'N/A'), inline=True)
+                embed.add_field(name="Description", value=profile_data.get('description', 'No description'), inline=False)
+                embed.add_field(name="Created", value=profile_data.get('created', 'N/A'), inline=True)
+                embed.add_field(name="Is Banned", value=str(profile_data.get('isBanned', False)), inline=True)
+                
+                # Set avatar image
+                if avatar_data.get('data') and len(avatar_data['data']) > 0:
+                    embed.set_image(url=avatar_data['data'][0]['imageUrl'])
+                else:
+                    embed.set_footer(text="No avatar available.")
+                
+                await message.channel.send(embed=embed)
+
+            except requests.exceptions.HTTPError as e:
+                status_code = e.response.status_code
+                if status_code == 429:
+                    await message.channel.send("Rate limit reached. Please try again later.")
+                else:
+                    await message.channel.send(f"HTTP error occurred: {status_code}. Please try again.")
+                print(f'HTTP Error: {e}')
+            except requests.exceptions.RequestException as e:
+                await message.channel.send("An error occurred while fetching Roblox data. Please try again later.")
+                print(f'Request Error: {e}')
+        else:
+            await message.channel.send("Please provide a Roblox username after $roblox_track.")
+
+    # Ensure the client processes commands
+    await client.process_commands(message)
+
+# Start the keep-alive web server for Replit
+keep_alive()
+
+# Run the bot
+client.run(TOKEN)
